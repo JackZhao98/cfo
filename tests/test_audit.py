@@ -14,6 +14,7 @@ def test_record_writes_single_line(tmp_data_dir):
     assert rec["result"] == "ok"
     assert rec["duration_ms"] == 5
     assert "ts" in rec
+    assert "+00:00" in rec["ts"]
     assert "pid" in rec
 
 
