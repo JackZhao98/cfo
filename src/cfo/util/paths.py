@@ -41,8 +41,3 @@ def tradebook_master() -> Path:
 
 def schedules_json() -> Path:
     return config_dir() / "schedules.json"
-
-
-def ensure_parent(path: Path) -> None:
-    """Create parent directory if it doesn't exist."""
-    path.parent.mkdir(parents=True, exist_ok=True)
