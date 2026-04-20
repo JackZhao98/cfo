@@ -1,7 +1,8 @@
 """Audit log writer."""
 import os
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Literal, Sequence
+from typing import Literal
 
 from cfo.util import atomic, paths
 

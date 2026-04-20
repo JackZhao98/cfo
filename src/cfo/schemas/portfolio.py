@@ -1,9 +1,7 @@
 """Portfolio schema v1."""
-from __future__ import annotations
-
 from datetime import date, datetime
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat
 
@@ -38,12 +36,12 @@ class Account(BaseModel):
     source: AccountSource
     balance: NonNegativeFloat
     cash: NonNegativeFloat = 0
-    holdings: List[Holding] = Field(default_factory=list)
-    last_manual_update: Optional[date] = None
+    holdings: list[Holding] = Field(default_factory=list)
+    last_manual_update: date | None = None
 
 
 class AccountsFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal[1]
     last_updated: datetime
-    accounts: List[Account]
+    accounts: list[Account]
