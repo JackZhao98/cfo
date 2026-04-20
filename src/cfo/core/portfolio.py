@@ -2,11 +2,8 @@
 
 Never mutates in place — always returns a new AccountsFile and overwrites.
 """
-from __future__ import annotations
-
 import json
 from datetime import date, datetime, timezone
-from typing import Optional
 
 from cfo.schemas.portfolio import Account, AccountsFile
 from cfo.util import atomic, paths
@@ -29,11 +26,11 @@ def load() -> AccountsFile:
 
 
 def save(af: AccountsFile) -> None:
-    af_fresh = af.model_copy(update={"last_updated": datetime.now(timezone.utc)})
-    atomic.write_json(paths.accounts_json(), af_fresh.model_dump(mode="json", exclude_none=True))
+    """Write the AccountsFile as-is. Callers are responsible for setting last_updated."""
+    atomic.write_json(paths.accounts_json(), af.model_dump(mode="json", exclude_none=True))
 
 
-def update_balance(account_id: str, balance: float, manual_date: Optional[date] = None) -> None:
+def update_balance(account_id: str, balance: float, manual_date: date | None = None) -> None:
     af = load()
     found = False
     new_accounts = []
@@ -48,11 +45,17 @@ def update_balance(account_id: str, balance: float, manual_date: Optional[date] 
             new_accounts.append(a)
     if not found:
         raise KeyError(f"account not found: {account_id}")
-    save(af.model_copy(update={"accounts": new_accounts}))
+    save(af.model_copy(update={
+        "accounts": new_accounts,
+        "last_updated": datetime.now(timezone.utc),
+    }))
 
 
 def add_account(account: Account) -> None:
     af = load()
     if any(a.id == account.id for a in af.accounts):
         raise ValueError(f"account id already exists: {account.id}")
-    save(af.model_copy(update={"accounts": af.accounts + [account]}))
+    save(af.model_copy(update={
+        "accounts": af.accounts + [account],
+        "last_updated": datetime.now(timezone.utc),
+    }))

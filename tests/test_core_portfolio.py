@@ -66,6 +66,26 @@ def test_add_account(tmp_data_dir):
     assert len(loaded.accounts) == 2
 
 
+def test_save_preserves_last_updated(tmp_data_dir):
+    explicit_ts = datetime(2020, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    af = AccountsFile(
+        schema_version=1,
+        last_updated=explicit_ts,
+        accounts=[
+            Account(
+                id="chase",
+                type=AccountType.checking,
+                broker="chase",
+                source=AccountSource.manual,
+                balance=100.00,
+            )
+        ],
+    )
+    core.save(af)
+    loaded = core.load()
+    assert loaded.last_updated == explicit_ts
+
+
 def test_add_account_duplicate_id_raises(tmp_data_dir):
     core.save(_sample_file())
     with pytest.raises(ValueError):
