@@ -92,3 +92,43 @@ def show(
     console.print(t)
     audit.record(cmd=["cfo", "tradebook", "show"], result="ok",
                  duration_ms=int((time.monotonic() - start) * 1000))
+
+
+@tradebook_app.command("reconcile")
+def reconcile():
+    """Diff rh raw trades.jsonl vs cfo master where source=rh, by rh_order_id."""
+    start = time.monotonic()
+    rh_log = paths.rh_raw_trades_jsonl()
+    if not rh_log.exists():
+        console.print("[yellow]no rh log at " + str(rh_log) + "[/yellow]")
+        audit.record(cmd=["cfo", "tradebook", "reconcile"], result="ok",
+                     duration_ms=int((time.monotonic() - start) * 1000))
+        return
+    rh_ids: set[str] = set()
+    for line in rh_log.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        oid = rec.get("rh_order_id") or rec.get("id")
+        if oid:
+            rh_ids.add(oid)
+    cfo_ids = {t.rh_order_id for t in core.filter_trades(mode=TradeMode.real) if t.rh_order_id}
+    missing_in_cfo = rh_ids - cfo_ids
+    extra_in_cfo = cfo_ids - rh_ids
+    if not missing_in_cfo and not extra_in_cfo:
+        console.print("[green]reconciled ok[/green] — all rh orders match cfo master")
+        audit.record(cmd=["cfo", "tradebook", "reconcile"], result="ok",
+                     duration_ms=int((time.monotonic() - start) * 1000))
+        return
+    if missing_in_cfo:
+        console.print(f"[red]{len(missing_in_cfo)} rh orders not in cfo master:[/red]")
+        for oid in missing_in_cfo:
+            console.print(f"  - {oid}")
+    if extra_in_cfo:
+        console.print(f"[red]{len(extra_in_cfo)} cfo trades have no matching rh order:[/red]")
+        for oid in extra_in_cfo:
+            console.print(f"  - {oid}")
+    audit.record(cmd=["cfo", "tradebook", "reconcile"], result="error",
+                 duration_ms=int((time.monotonic() - start) * 1000))
+    raise typer.Exit(code=1)
