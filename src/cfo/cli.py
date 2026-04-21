@@ -23,4 +23,6 @@ def version():
     typer.echo(f"cfo {__version__}")
 
 
-# Subcommand groups added in later tasks (portfolio, init, migrate, ...).
+from cfo.commands.portfolio import portfolio_app  # noqa: E402
+
+app.add_typer(portfolio_app, name="portfolio")
