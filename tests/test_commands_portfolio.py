@@ -61,3 +61,72 @@ def test_portfolio_update_unknown_account_exits_nonzero(tmp_data_dir):
     result = runner.invoke(app, ["portfolio", "update", "--account", "nope", "--balance", "1"])
     assert result.exit_code != 0
     assert "not found" in result.stdout.lower() or "not found" in str(result.exception).lower()
+
+
+def test_sync_upserts_accounts(tmp_data_dir, monkeypatch):
+    import subprocess
+    import json as _json
+
+    payload = {
+        "accounts": [
+            {"id": "individual", "type": "taxable", "balance": 30000, "cash": 100, "holdings": []},
+            {"id": "roth", "type": "roth_ira", "balance": 14500, "cash": 0, "holdings": []},
+        ],
+    }
+
+    class Fake:
+        returncode = 0
+        stdout = _json.dumps(payload)
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
+
+    result = runner.invoke(app, ["portfolio", "sync"])
+    assert result.exit_code == 0, result.stdout
+
+    from cfo.core import portfolio as core
+    af = core.load()
+    ids = {a.id for a in af.accounts}
+    assert "rh-individual" in ids
+    assert "rh-roth" in ids
+
+
+def test_sync_rh_failure_exits_nonzero(tmp_data_dir, monkeypatch):
+    import subprocess
+
+    class Fake:
+        returncode = 1
+        stdout = ""
+        stderr = "not authenticated"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
+    result = runner.invoke(app, ["portfolio", "sync"])
+    assert result.exit_code != 0
+
+
+def test_sync_preserves_non_rh_accounts(tmp_data_dir, monkeypatch):
+    _seed(tmp_data_dir)
+    import subprocess
+    import json as _json
+
+    payload = {
+        "accounts": [
+            {"id": "individual", "type": "taxable", "balance": 31000, "cash": 50, "holdings": []},
+        ],
+    }
+
+    class Fake:
+        returncode = 0
+        stdout = _json.dumps(payload)
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
+    result = runner.invoke(app, ["portfolio", "sync"])
+    assert result.exit_code == 0, result.stdout
+
+    af = core.load()
+    ids = {a.id for a in af.accounts}
+    assert "chase" in ids  # non-rh preserved
+    assert "rh-individual" in ids
+    rh = [a for a in af.accounts if a.id == "rh-individual"][0]
+    assert rh.balance == 31000
