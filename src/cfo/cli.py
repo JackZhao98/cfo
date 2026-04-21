@@ -38,3 +38,7 @@ app.add_typer(tradebook_app, name="tradebook")
 from cfo.commands.strategy import strategy_app  # noqa: E402
 
 app.add_typer(strategy_app, name="strategy")
+
+from cfo.commands.paper import paper_app  # noqa: E402
+
+app.add_typer(paper_app, name="paper")
