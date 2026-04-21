@@ -41,3 +41,23 @@ def tradebook_master() -> Path:
 
 def schedules_json() -> Path:
     return config_dir() / "schedules.json"
+
+
+def tax_lots_json() -> Path:
+    return data_dir() / "tradebook" / "tax-lots.json"
+
+
+def rh_raw_trades_jsonl() -> Path:
+    return rh_config_dir() / "trades.jsonl"
+
+
+def strategies_dir() -> Path:
+    return data_dir() / "strategies"
+
+
+def paper_strategies_dir() -> Path:
+    return data_dir() / "paper" / "strategies"
+
+
+def paper_composite_dir() -> Path:
+    return data_dir() / "paper" / "composite"
