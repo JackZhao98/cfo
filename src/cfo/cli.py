@@ -42,3 +42,7 @@ app.add_typer(strategy_app, name="strategy")
 from cfo.commands.paper import paper_app  # noqa: E402
 
 app.add_typer(paper_app, name="paper")
+
+from cfo.commands.schedule import schedule_app  # noqa: E402
+
+app.add_typer(schedule_app, name="schedule")
