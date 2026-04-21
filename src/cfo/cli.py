@@ -34,3 +34,7 @@ app.command("init", help="Run the 15-question onboarding questionnaire.")(init_c
 from cfo.commands.tradebook import tradebook_app  # noqa: E402
 
 app.add_typer(tradebook_app, name="tradebook")
+
+from cfo.commands.strategy import strategy_app  # noqa: E402
+
+app.add_typer(strategy_app, name="strategy")
