@@ -67,6 +67,14 @@ def price_log_dir() -> Path:
     return data_dir() / "price-log"
 
 
+def reports_dir() -> Path:
+    return data_dir() / "reports"
+
+
+def portfolio_history_dir() -> Path:
+    return data_dir() / "portfolio" / "history"
+
+
 def launch_agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
