@@ -61,3 +61,52 @@ def test_snapshot_invalid_json_raises(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
     with pytest.raises(RuntimeError):
         rh_bridge.snapshot()
+
+
+def test_quote_parses_json(monkeypatch):
+    payload = {
+        "symbol": "VOO",
+        "last_price": 651.51,
+        "bid": 652.69,
+        "ask": 652.8,
+        "updated_at": "2026-04-21T02:10:34Z",
+    }
+
+    captured = {}
+
+    class Fake:
+        returncode = 0
+        stdout = json.dumps(payload)
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        return Fake()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = rh_bridge.quote("VOO")
+    assert out == payload
+    assert captured["cmd"] == ["rh", "quote", "VOO", "--format", "json"]
+
+
+def test_quote_nonzero_raises(monkeypatch):
+    class Fake:
+        returncode = 1
+        stdout = ""
+        stderr = "symbol not found"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
+    with pytest.raises(RuntimeError) as e:
+        rh_bridge.quote("BADSYM")
+    assert "symbol not found" in str(e.value)
+
+
+def test_quote_invalid_json_raises(monkeypatch):
+    class Fake:
+        returncode = 0
+        stdout = "not json"
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Fake())
+    with pytest.raises(RuntimeError):
+        rh_bridge.quote("VOO")
