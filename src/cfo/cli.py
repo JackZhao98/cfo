@@ -46,3 +46,7 @@ app.add_typer(paper_app, name="paper")
 from cfo.commands.schedule import schedule_app  # noqa: E402
 
 app.add_typer(schedule_app, name="schedule")
+
+from cfo.commands.price_log import price_log_app  # noqa: E402
+
+app.add_typer(price_log_app, name="price-log")
