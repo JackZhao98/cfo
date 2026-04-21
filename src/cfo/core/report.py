@@ -1,4 +1,5 @@
 """Generate weekly / monthly markdown reports from existing cfo data."""
+import json
 from datetime import date, timedelta
 
 from cfo.core import audit_query
@@ -6,13 +7,36 @@ from cfo.core import history as core_history
 from cfo.core import portfolio as core_portfolio
 from cfo.core import strategy as core_strategy
 from cfo.core import tradebook as core_tradebook
-from cfo.schemas.tradebook import TradeMode
-from cfo.util import timerange
+from cfo.schemas.tradebook import Trade, TradeMode
+from cfo.util import paths, timerange
 
 
-def _trades_between(start: date, end: date):
+def _load_trades_tolerant() -> list[Trade]:
+    """Like tradebook.load_all but skips rows that fail schema validation
+    (e.g. legacy_csv placeholder rows with empty side/null qty)."""
+    p = paths.tradebook_master()
+    if not p.exists():
+        return []
+    out: list[Trade] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(Trade.model_validate(json.loads(line)))
+        except Exception:
+            # Skip malformed / legacy rows; do not fail report generation.
+            continue
+    return out
+
+
+def _trades_between(start: date, end: date) -> list[Trade]:
+    try:
+        all_trades = core_tradebook.load_all()
+    except Exception:
+        all_trades = _load_trades_tolerant()
     return [
-        t for t in core_tradebook.load_all()
+        t for t in all_trades
         if timerange.datetime_in_range(t.ts, start, end)
     ]
 
