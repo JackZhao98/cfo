@@ -16,15 +16,46 @@ portfolio_app = typer.Typer(help="Portfolio management (accounts, holdings).")
 
 
 _RH_TYPE_MAP: dict[str, AccountType] = {
-    "taxable": AccountType.taxable,
     "individual": AccountType.taxable,
-    "roth_ira": AccountType.roth_ira,
-    "roth": AccountType.roth_ira,
-    "traditional_ira": AccountType.traditional_ira,
-    "traditional": AccountType.traditional_ira,
-    "hysa": AccountType.hysa,
-    "savings": AccountType.hysa,
+    "ira_roth": AccountType.roth_ira,
+    "ira_traditional": AccountType.traditional_ira,
 }
+
+
+# Stable CFO account IDs for well-known RH account types.
+# Fallback: rh-<account_number> if type unrecognized (ensures uniqueness).
+_RH_ID_MAP: dict[str, str] = {
+    "individual": "rh-individual",
+    "ira_roth": "rh-roth",
+    "ira_traditional": "rh-traditional",
+}
+
+
+def _rh_account_to_cfo(rh_a: dict) -> Account:
+    """Map rh `account snapshot --format json` account shape to cfo Account."""
+    rh_type = str(rh_a.get("brokerage_account_type", "")).lower()
+    account_number = str(rh_a.get("account_number", ""))
+    cfo_id = _RH_ID_MAP.get(rh_type) or f"rh-{account_number}"
+    atype = _RH_TYPE_MAP.get(rh_type, AccountType.other)
+    balance = float(rh_a.get("portfolio_value", 0))
+    cash = float(rh_a.get("cash", 0))
+    holdings = [
+        {
+            "symbol": h.get("symbol", ""),
+            "qty": float(h.get("shares", 0)),
+            "cost_basis": float(h.get("avg_cost", 0)),
+        }
+        for h in rh_a.get("holdings", [])
+    ]
+    return Account(
+        id=cfo_id,
+        type=atype,
+        broker="robinhood",
+        source=AccountSource.rh_sync,
+        balance=balance,
+        cash=cash,
+        holdings=holdings,
+    )
 
 
 @portfolio_app.command("show")
@@ -102,22 +133,8 @@ def sync():
     added = 0
 
     for rh_a in payload.get("accounts", []):
-        rh_id = rh_a.get("id", "")
-        cfo_id = f"rh-{rh_id}"
-        atype = _RH_TYPE_MAP.get(str(rh_a.get("type", "")).lower(), AccountType.other)
-        balance = float(rh_a.get("balance", 0))
-        cash = float(rh_a.get("cash", 0))
-        holdings = rh_a.get("holdings", [])
-        acc = Account(
-            id=cfo_id,
-            type=atype,
-            broker="robinhood",
-            source=AccountSource.rh_sync,
-            balance=balance,
-            cash=cash,
-            holdings=holdings,
-        )
-        if cfo_id in existing_by_id:
+        acc = _rh_account_to_cfo(rh_a)
+        if acc.id in existing_by_id:
             updated += 1
         else:
             added += 1

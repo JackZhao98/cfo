@@ -4,9 +4,9 @@ import subprocess
 
 
 def snapshot() -> dict:
-    """Run `rh account snapshot --json` and parse output."""
+    """Run `rh account snapshot --format json` and parse output."""
     result = subprocess.run(
-        ["rh", "account", "snapshot", "--json"],
+        ["rh", "account", "snapshot", "--format", "json"],
         capture_output=True,
         text=True,
         timeout=30,

@@ -9,22 +9,35 @@ from cfo.core import rh_bridge
 
 def test_snapshot_parses_json(monkeypatch):
     payload = {
+        "total_portfolio": 16956.93,
+        "total_cash": 11383.71,
         "accounts": [
-            {"id": "individual", "type": "taxable", "balance": 30000, "cash": 100, "holdings": []},
+            {
+                "account_number": "597357623",
+                "brokerage_account_type": "individual",
+                "portfolio_value": 8043.00,
+                "cash": 7450.38,
+                "holdings": [],
+            },
         ],
     }
+
+    captured = {}
 
     class Fake:
         returncode = 0
         stdout = json.dumps(payload)
         stderr = ""
 
-    def fake_run(*args, **kwargs):
+    def fake_run(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
         return Fake()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = rh_bridge.snapshot()
     assert out == payload
+    # Verify we invoke the correct rh flag
+    assert captured["cmd"] == ["rh", "account", "snapshot", "--format", "json"]
 
 
 def test_snapshot_nonzero_raises(monkeypatch):
