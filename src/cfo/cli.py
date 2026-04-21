@@ -26,3 +26,7 @@ def version():
 from cfo.commands.portfolio import portfolio_app  # noqa: E402
 
 app.add_typer(portfolio_app, name="portfolio")
+
+from cfo.commands.init import init as init_cmd  # noqa: E402
+
+app.command("init", help="Run the 15-question onboarding questionnaire.")(init_cmd)
