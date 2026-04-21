@@ -61,3 +61,15 @@ def paper_strategies_dir() -> Path:
 
 def paper_composite_dir() -> Path:
     return data_dir() / "paper" / "composite"
+
+
+def price_log_dir() -> Path:
+    return data_dir() / "price-log"
+
+
+def launch_agents_dir() -> Path:
+    return Path.home() / "Library" / "LaunchAgents"
+
+
+def systemd_user_dir() -> Path:
+    return Path.home() / ".config" / "systemd" / "user"

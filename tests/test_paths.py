@@ -38,3 +38,19 @@ def test_default_data_dir_without_env(monkeypatch):
     monkeypatch.delenv("CFO_DATA_DIR", raising=False)
     p = paths.data_dir()
     assert p.is_absolute()
+
+
+def test_price_log_dir(tmp_data_dir):
+    assert paths.price_log_dir() == tmp_data_dir["data"] / "price-log"
+
+
+def test_launch_agents_dir():
+    p = paths.launch_agents_dir()
+    assert p.is_absolute()
+    assert p.name == "LaunchAgents"
+
+
+def test_systemd_user_dir():
+    p = paths.systemd_user_dir()
+    assert p.is_absolute()
+    assert p.parts[-3:] == (".config", "systemd", "user")
