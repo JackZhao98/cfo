@@ -3,9 +3,17 @@ import os
 from pathlib import Path
 
 
-DEFAULT_DATA_DIR = Path.home() / "Developer" / "Robinhood" / "data"
-DEFAULT_CONFIG_DIR = Path.home() / ".config" / "cfo"
+DEFAULT_DATA_DIR = Path.home() / ".cfo" / "data"
+DEFAULT_CONFIG_DIR = Path.home() / ".cfo" / "config"
 DEFAULT_RH_CONFIG_DIR = Path.home() / ".config" / "rh"
+
+# Legacy locations (pre-Phase-F). `cfo migrate paths` moves them.
+LEGACY_DATA_DIRS = [
+    Path.home() / "Developer" / "Robinhood" / "data",
+]
+LEGACY_CONFIG_DIRS = [
+    Path.home() / ".config" / "cfo",
+]
 
 
 def data_dir() -> Path:

@@ -54,3 +54,7 @@ app.add_typer(price_log_app, name="price-log")
 from cfo.commands.report import report_app  # noqa: E402
 
 app.add_typer(report_app, name="report")
+
+from cfo.commands.migrate import migrate_app  # noqa: E402
+
+app.add_typer(migrate_app, name="migrate")
