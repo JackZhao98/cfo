@@ -36,3 +36,15 @@ def test_csv_missing_raises(tmp_path):
     dst = tmp_path / "master.jsonl"
     with pytest.raises(FileNotFoundError):
         mig.convert(tmp_path / "nope.csv", dst)
+
+
+def test_jack_profile_copy(tmp_path):
+    from cfo.migrations_oneshot import jack_profile as migp
+    src = tmp_path / "old-profile.md"
+    src.write_text("# Jack\n\nAge: 28\n\n## Accounts\n- RH: $30k\n", encoding="utf-8")
+    dst = tmp_path / "out" / "profile.md"
+    migp.copy(src, dst)
+    assert dst.exists()
+    content = dst.read_text()
+    assert "Jack" in content
+    assert "Migrated" in content  # banner present
