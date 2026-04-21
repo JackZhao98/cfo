@@ -43,6 +43,14 @@ def last_month_bounds(today: date | None = None) -> tuple[date, date]:
 
 
 def datetime_in_range(dt: datetime, start: date, end: date) -> bool:
-    """Inclusive on both ends (compares date part)."""
-    d = dt.date() if isinstance(dt, datetime) else dt
+    """Inclusive on both ends (compares local date part).
+
+    Timezone-aware datetimes are converted to the local timezone before the
+    date extraction so comparisons against `date.today()`-derived bounds
+    behave consistently.
+    """
+    if isinstance(dt, datetime):
+        d = dt.astimezone().date() if dt.tzinfo is not None else dt.date()
+    else:
+        d = dt
     return start <= d <= end
