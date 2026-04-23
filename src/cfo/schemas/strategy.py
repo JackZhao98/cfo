@@ -3,7 +3,7 @@ from datetime import date
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, NonNegativeFloat
 
 
 class StrategyState(str, Enum):
@@ -21,6 +21,8 @@ class StrategyMeta(BaseModel):
     state: StrategyState
     created_at: date | None = None
     paper_portfolio: str | None = None
+    live_account: str | None = None
+    capital_budget: NonNegativeFloat | None = None
     entry_rules: list[str] = []
     exit_rules: list[str] = []
     position_sizing: dict = {}

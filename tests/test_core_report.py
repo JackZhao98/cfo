@@ -71,3 +71,21 @@ def test_weekly_snapshot_delta_when_prev_exists(tmp_data_dir):
     md = report.weekly(today=date(2026, 4, 22))  # W17
     # Should include portfolio delta vs W16 (+50.00)
     assert "50" in md
+
+
+def test_weekly_strategies_section_includes_live_account(tmp_data_dir):
+    core_s.new_strategy("x", template="wheel")
+    core_s.set_paper_portfolio("x", "paper-x")
+    core_p.add_account(Account(
+        id="rh-roth",
+        type=AccountType.roth_ira,
+        broker="robinhood",
+        source=AccountSource.rh_sync,
+        balance=1000,
+    ))
+    core_s.set_live_account("x", "rh-roth")
+    core_s.set_capital_budget("x", 2500)
+    md = report.weekly(today=date.today())
+    assert "| Name | State | Created | Paper | Live | Budget |" in md
+    assert "rh-roth" in md
+    assert "$2,500.00" in md

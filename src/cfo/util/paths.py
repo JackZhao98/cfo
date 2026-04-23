@@ -51,6 +51,14 @@ def schedules_json() -> Path:
     return config_dir() / "schedules.json"
 
 
+def rh_server_json() -> Path:
+    return config_dir() / "rh-server.json"
+
+
+def remote_schedules_md() -> Path:
+    return data_dir() / "reports" / "remote-schedules.md"
+
+
 def tax_lots_json() -> Path:
     return data_dir() / "tradebook" / "tax-lots.json"
 
@@ -81,6 +89,11 @@ def reports_dir() -> Path:
 
 def portfolio_history_dir() -> Path:
     return data_dir() / "portfolio" / "history"
+
+
+def market_db() -> Path:
+    """SQLite database aggregating rh-server run artifacts for local queries."""
+    return data_dir() / "market.db"
 
 
 def launch_agents_dir() -> Path:

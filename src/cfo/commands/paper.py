@@ -8,6 +8,7 @@ from rich.table import Table
 from cfo.core import paper as core
 from cfo.schemas.paper import PaperKind
 from cfo.util import audit
+from cfo.util.render import OutputFormat, render_json, render_plain
 
 console = Console()
 paper_app = typer.Typer(help="Paper portfolio management.")
@@ -31,7 +32,7 @@ def create_cmd(
         raise typer.Exit(code=1)
     try:
         core.create(kind=kind, pid=name, capital=capital, strategy_ref=strategy)
-    except FileExistsError as e:
+    except (FileExistsError, FileNotFoundError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
         audit.record(cmd=["cfo", "paper", "create", name], result="error",
                      duration_ms=int((time.monotonic() - start) * 1000))
@@ -42,21 +43,37 @@ def create_cmd(
 
 
 @paper_app.command("list")
-def list_cmd():
+def list_cmd(
+    format: OutputFormat = typer.Option(OutputFormat.table, "--format", help="table | plain | json"),
+):
     metas = core.list_all()
+    payload = {
+        "count": len(metas),
+        "paper_portfolios": metas,
+    }
     if not metas:
-        console.print("[yellow]no paper portfolios. run `cfo paper create`[/yellow]")
+        if format == OutputFormat.table:
+            console.print("[yellow]no paper portfolios. run `cfo paper create`[/yellow]")
+        elif format == OutputFormat.plain:
+            render_plain(console, payload)
+        else:
+            render_json(console, payload)
         return
-    t = Table(title=f"Paper Portfolios ({len(metas)})")
-    for col in ("ID", "Kind", "Strategy", "Capital Start", "Capital Now", "Status", "Created"):
-        t.add_column(col)
-    for m in metas:
-        t.add_row(
-            m.id, m.kind.value, m.strategy_ref or "-",
-            f"{m.capital_start:,.2f}", f"{m.capital_current:,.2f}",
-            m.status, m.created_at.isoformat(),
-        )
-    console.print(t)
+    if format == OutputFormat.plain:
+        render_plain(console, payload)
+    elif format == OutputFormat.json:
+        render_json(console, payload)
+    else:
+        t = Table(title=f"Paper Portfolios ({len(metas)})")
+        for col in ("ID", "Kind", "Strategy", "Capital Start", "Capital Now", "Status", "Created"):
+            t.add_column(col)
+        for m in metas:
+            t.add_row(
+                m.id, m.kind.value, m.strategy_ref or "-",
+                f"{m.capital_start:,.2f}", f"{m.capital_current:,.2f}",
+                m.status, m.created_at.isoformat(),
+            )
+        console.print(t)
 
 
 @paper_app.command("close")

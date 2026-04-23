@@ -89,11 +89,13 @@ def _section_strategies() -> str:
     if not metas:
         lines.extend(["No strategies defined.", ""])
         return "\n".join(lines)
-    lines.append("| Name | State | Created | Paper |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Name | State | Created | Paper | Live | Budget |")
+    lines.append("|---|---|---|---|---|---:|")
     for m in metas:
         lines.append(
-            f"| {m.name} | {m.state.value} | {m.created_at or '-'} | {m.paper_portfolio or '-'} |"
+            f"| {m.name} | {m.state.value} | {m.created_at or '-'} | "
+            f"{m.paper_portfolio or '-'} | {m.live_account or '-'} | "
+            f"{f'${m.capital_budget:,.2f}' if m.capital_budget is not None else '-'} |"
         )
     lines.append("")
     return "\n".join(lines)

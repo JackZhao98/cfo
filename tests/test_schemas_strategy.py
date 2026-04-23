@@ -8,6 +8,8 @@ def test_strategy_meta_minimal():
     s = StrategyMeta(name="wheel-sofi", state=StrategyState.draft)
     assert s.schema_version == 1
     assert s.entry_rules == []
+    assert s.live_account is None
+    assert s.capital_budget is None
 
 
 def test_state_transitions_allowed():

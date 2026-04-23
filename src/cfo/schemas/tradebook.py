@@ -46,3 +46,7 @@ class Trade(BaseModel):
     exp: str | None = None      # YYYY-MM-DD
     premium: NonNegativeFloat | None = None
     rh_order_id: str | None = None
+    order_state: str | None = None
+    order_updated_at: datetime | None = None
+    filled_qty: NonNegativeFloat | None = None
+    fill_price: NonNegativeFloat | None = None

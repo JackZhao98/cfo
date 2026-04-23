@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -60,3 +61,62 @@ def test_filter_by_month(tmp_data_dir):
     core.append(_mk(symbol="NVDA").model_copy(update={"ts": datetime(2026, 4, 10, tzinfo=timezone.utc)}))
     apr = core.filter_trades(month="2026-04")
     assert len(apr) == 1 and apr[0].symbol == "NVDA"
+
+
+def test_sync_order_details_updates_pending_trade(tmp_data_dir):
+    trade = _mk().model_copy(update={"rh_order_id": "abc", "order_state": "queued"})
+    core.append(trade)
+
+    def fetch_order(order_id: str):
+        assert order_id == "abc"
+        return {
+            "id": "abc",
+            "state": "filled",
+            "updated_at": "2026-04-21T04:26:36.896359Z",
+            "cumulative_quantity": 1,
+            "average_price": 101.25,
+        }
+
+    changed = core.sync_order_details(fetch_order, pending_only=True)
+    assert changed == 1
+    updated = core.load_all()[0]
+    assert updated.order_state == "filled"
+    assert updated.filled_qty == 1
+    assert updated.fill_price == 101.25
+
+
+def test_sync_order_details_skips_terminal_when_pending_only(tmp_data_dir):
+    trade = _mk().model_copy(update={"rh_order_id": "abc", "order_state": "filled"})
+    core.append(trade)
+
+    def fetch_order(order_id: str):
+        raise AssertionError("should not fetch terminal orders")
+
+    changed = core.sync_order_details(fetch_order, pending_only=True)
+    assert changed == 0
+
+
+def test_import_rh_trades_log_imports_missing_orders(tmp_data_dir):
+    src = Path(tmp_data_dir["rh_config"]) / "trades.jsonl"
+    src.write_text(
+        '{"ts":"2026-04-21T05:37:41Z","rh_order_id":"oid1","account_number":"597357623","symbol":"QQQM","side":"buy","type":"MKT","tif":"GFD","shares":"0.037424","price":"267.2100","notional_usd":"10.00","state":"queued"}\n',
+        encoding="utf-8",
+    )
+    imported = core.import_rh_trades_log(src)
+    assert imported == 1
+    trade = core.load_all()[0]
+    assert trade.account_id == "rh-individual"
+    assert trade.symbol == "QQQM"
+    assert trade.rh_order_id == "oid1"
+    assert trade.order_state == "queued"
+
+
+def test_import_rh_trades_log_skips_existing_orders(tmp_data_dir):
+    src = Path(tmp_data_dir["rh_config"]) / "trades.jsonl"
+    src.write_text(
+        '{"ts":"2026-04-21T05:37:41Z","rh_order_id":"oid1","account_number":"597357623","symbol":"QQQM","side":"buy","type":"MKT","tif":"GFD","shares":"0.037424","price":"267.2100","notional_usd":"10.00","state":"queued"}\n',
+        encoding="utf-8",
+    )
+    core.append(_mk(symbol="QQQM").model_copy(update={"rh_order_id": "oid1", "order_state": "queued"}))
+    imported = core.import_rh_trades_log(src)
+    assert imported == 0

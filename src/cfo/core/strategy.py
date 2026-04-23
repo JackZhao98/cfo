@@ -2,6 +2,7 @@
 from datetime import date
 from pathlib import Path
 
+from cfo.core import portfolio as portfolio_core
 from cfo.schemas.strategy import StrategyMeta, StrategyState
 from cfo.util import paths, yaml_io
 
@@ -91,8 +92,60 @@ def transition(name: str, to: StrategyState) -> None:
             f"illegal transition {meta.state.value} → {to.value} "
             f"(allowed: {sorted(s.value for s in ALLOWED_TRANSITIONS[meta.state])})"
         )
+    if to == StrategyState.paper and not meta.paper_portfolio:
+        raise ValueError(
+            f"strategy {name} has no paper_portfolio; create or bind a paper portfolio first"
+        )
+    if to == StrategyState.live and not meta.live_account:
+        raise ValueError(f"strategy {name} has no live_account; run `cfo strategy bind-live {name} --account <id>` first")
     new_history = meta.history + [
         {"date": date.today().isoformat(), "event": f"state: {meta.state.value} → {to.value}"}
     ]
     new_meta = meta.model_copy(update={"state": to, "history": new_history})
+    _save_meta(new_meta)
+
+
+def set_paper_portfolio(name: str, paper_portfolio: str | None) -> None:
+    meta = load_meta(name)
+    if meta.paper_portfolio == paper_portfolio:
+        return
+    event = f"paper_portfolio: {meta.paper_portfolio or '-'} → {paper_portfolio or '-'}"
+    new_meta = meta.model_copy(
+        update={
+            "paper_portfolio": paper_portfolio,
+            "history": meta.history + [{"date": date.today().isoformat(), "event": event}],
+        }
+    )
+    _save_meta(new_meta)
+
+
+def set_live_account(name: str, live_account: str | None) -> None:
+    meta = load_meta(name)
+    if live_account is not None:
+        af = portfolio_core.load()
+        if not any(a.id == live_account for a in af.accounts):
+            raise KeyError(f"account not found: {live_account}")
+    if meta.live_account == live_account:
+        return
+    event = f"live_account: {meta.live_account or '-'} → {live_account or '-'}"
+    new_meta = meta.model_copy(
+        update={
+            "live_account": live_account,
+            "history": meta.history + [{"date": date.today().isoformat(), "event": event}],
+        }
+    )
+    _save_meta(new_meta)
+
+
+def set_capital_budget(name: str, capital_budget: float | None) -> None:
+    meta = load_meta(name)
+    if meta.capital_budget == capital_budget:
+        return
+    event = f"capital_budget: {meta.capital_budget if meta.capital_budget is not None else '-'} → {capital_budget if capital_budget is not None else '-'}"
+    new_meta = meta.model_copy(
+        update={
+            "capital_budget": capital_budget,
+            "history": meta.history + [{"date": date.today().isoformat(), "event": event}],
+        }
+    )
     _save_meta(new_meta)

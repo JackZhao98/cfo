@@ -58,3 +58,16 @@ app.add_typer(report_app, name="report")
 from cfo.commands.migrate import migrate_app  # noqa: E402
 
 app.add_typer(migrate_app, name="migrate")
+
+from cfo.commands.market import market_app  # noqa: E402
+
+app.add_typer(market_app, name="market")
+
+from cfo.commands.db import db_app  # noqa: E402
+
+app.add_typer(db_app, name="db")
+
+from cfo.commands.root_ops import sync_cmd, status_cmd  # noqa: E402
+
+app.command("sync", help="Strong-default one-shot sync: portfolio + raw trades + order states.")(sync_cmd)
+app.command("status", help="Unified overview: accounts, strategies, paper, trades, pending orders.")(status_cmd)

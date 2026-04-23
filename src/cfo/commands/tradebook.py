@@ -1,16 +1,21 @@
 """cfo tradebook — add / show / reconcile."""
 import json
+import shutil
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from cfo.core import rh_bridge
 from cfo.core import tradebook as core
+from cfo.migrations_oneshot import trades_csv as trades_csv_migration
 from cfo.schemas.tradebook import Trade, TradeMode, TradeSide, TradeSource
 from cfo.util import audit, paths
+from cfo.util.render import OutputFormat, format_local_dt, render_json, render_plain
 
 console = Console()
 tradebook_app = typer.Typer(help="Tradebook (real + paper trades).")
@@ -64,32 +69,57 @@ def show(
     month: str | None = typer.Option(None, "--month", help="YYYY-MM"),
     account: str | None = typer.Option(None, "--account"),
     limit: int = typer.Option(50, "--limit"),
+    format: OutputFormat = typer.Option(OutputFormat.table, "--format", help="table | plain | json"),
 ):
     """Show trades with optional filters."""
     start = time.monotonic()
     trades = core.filter_trades(mode=mode, strategy=strategy, symbol=symbol, month=month, account_id=account)
     trades = trades[-limit:]
+    payload = {
+        "count": len(trades),
+        "filters": {
+            "mode": mode.value if mode else None,
+            "strategy": strategy,
+            "symbol": symbol,
+            "month": month,
+            "account": account,
+            "limit": limit,
+        },
+        "trades": trades,
+    }
     if not trades:
-        console.print("[yellow]no trades match[/yellow]")
+        if format == OutputFormat.table:
+            console.print("[yellow]no trades match[/yellow]")
+        elif format == OutputFormat.plain:
+            render_plain(console, payload)
+        else:
+            render_json(console, payload)
         audit.record(cmd=["cfo", "tradebook", "show"], result="ok",
                      duration_ms=int((time.monotonic() - start) * 1000))
         return
-    t = Table(title=f"Tradebook ({len(trades)} trades)")
-    for col in ("TS", "Mode", "Account", "Symbol", "Side", "Qty", "Price", "Total", "Strategy"):
-        t.add_column(col)
-    for tr in trades:
-        t.add_row(
-            tr.ts.isoformat(timespec="minutes"),
-            tr.mode.value,
-            tr.account_id,
-            tr.symbol,
-            tr.side.value,
-            f"{tr.qty:g}",
-            f"{tr.price:.2f}" if tr.price is not None else "-",
-            f"{tr.total:.2f}" if tr.total is not None else "-",
-            tr.strategy or "-",
-        )
-    console.print(t)
+    if format == OutputFormat.plain:
+        render_plain(console, payload)
+    elif format == OutputFormat.json:
+        render_json(console, payload)
+    else:
+        t = Table(title=f"Tradebook ({len(trades)} trades)")
+        for col in ("TS", "Mode", "Account", "Symbol", "Side", "Qty", "Price", "Total", "Strategy", "State", "OrderID"):
+            t.add_column(col)
+        for tr in trades:
+            t.add_row(
+                format_local_dt(tr.ts),
+                tr.mode.value,
+                tr.account_id,
+                tr.symbol,
+                tr.side.value,
+                f"{tr.qty:g}",
+                f"{tr.price:.2f}" if tr.price is not None else "-",
+                f"{tr.total:.2f}" if tr.total is not None else "-",
+                tr.strategy or "-",
+                tr.order_state or "-",
+                tr.rh_order_id or "-",
+            )
+        console.print(t)
     audit.record(cmd=["cfo", "tradebook", "show"], result="ok",
                  duration_ms=int((time.monotonic() - start) * 1000))
 
@@ -132,3 +162,58 @@ def reconcile():
     audit.record(cmd=["cfo", "tradebook", "reconcile"], result="error",
                  duration_ms=int((time.monotonic() - start) * 1000))
     raise typer.Exit(code=1)
+
+
+@tradebook_app.command("repair")
+def repair(
+    src: Path = typer.Option(
+        Path.home() / "Developer" / "Robinhood" / "tradebook" / "trades.csv",
+        "--src",
+        help="Legacy trades.csv path to rebuild master.jsonl from.",
+    ),
+):
+    """Rebuild master.jsonl from the legacy trades.csv and back up the current file."""
+    start = time.monotonic()
+    dst = paths.tradebook_master()
+    if not src.exists():
+        console.print(f"[red]legacy csv not found: {src}[/red]")
+        audit.record(cmd=["cfo", "tradebook", "repair", str(src)], result="error",
+                     duration_ms=int((time.monotonic() - start) * 1000))
+        raise typer.Exit(code=1)
+    if dst.exists():
+        backup = dst.with_name(f"{dst.name}.bak-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst, backup)
+        console.print(f"[cyan]backup[/cyan] {backup}")
+    n = trades_csv_migration.convert(src, dst)
+    console.print(f"[green]ok[/green] rebuilt tradebook from legacy csv ({n} trade(s))")
+    audit.record(cmd=["cfo", "tradebook", "repair", str(src)], result="ok",
+                 duration_ms=int((time.monotonic() - start) * 1000))
+
+
+@tradebook_app.command("sync-orders")
+def sync_orders(
+    all_orders: bool = typer.Option(False, "--all", help="Refresh all real orders, not just open/pending ones."),
+):
+    """Refresh order state/fill details from Robinhood for tracked real orders."""
+    start = time.monotonic()
+    try:
+        changed = core.sync_order_details(rh_bridge.order, pending_only=not all_orders)
+    except RuntimeError as e:
+        console.print(f"[red]order sync failed: {e}[/red]")
+        audit.record(cmd=["cfo", "tradebook", "sync-orders"], result="error",
+                     duration_ms=int((time.monotonic() - start) * 1000))
+        raise typer.Exit(code=1)
+    console.print(f"[green]ok[/green] refreshed {changed} trade(s)")
+    audit.record(cmd=["cfo", "tradebook", "sync-orders"], result="ok",
+                 duration_ms=int((time.monotonic() - start) * 1000))
+
+
+@tradebook_app.command("import-rh")
+def import_rh():
+    """Import missing real trades from ~/.config/rh/trades.jsonl into master.jsonl."""
+    start = time.monotonic()
+    imported = core.import_rh_trades_log()
+    console.print(f"[green]ok[/green] imported {imported} trade(s) from rh raw log")
+    audit.record(cmd=["cfo", "tradebook", "import-rh"], result="ok",
+                 duration_ms=int((time.monotonic() - start) * 1000))

@@ -34,6 +34,16 @@ def test_tradebook_master_path(tmp_data_dir):
     assert paths.tradebook_master() == expected
 
 
+def test_rh_server_json_path(tmp_data_dir):
+    expected = tmp_data_dir["config"] / "rh-server.json"
+    assert paths.rh_server_json() == expected
+
+
+def test_remote_schedules_md_path(tmp_data_dir):
+    expected = tmp_data_dir["data"] / "reports" / "remote-schedules.md"
+    assert paths.remote_schedules_md() == expected
+
+
 def test_default_data_dir_without_env(monkeypatch):
     monkeypatch.delenv("CFO_DATA_DIR", raising=False)
     p = paths.data_dir()
