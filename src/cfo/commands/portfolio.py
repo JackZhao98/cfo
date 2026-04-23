@@ -34,8 +34,12 @@ _RH_ID_MAP: dict[str, str] = {
 def _rh_account_to_cfo(rh_a: dict) -> Account:
     """Map rh `account snapshot --format json` account shape to cfo Account."""
     rh_type = str(rh_a.get("brokerage_account_type", "")).lower()
+    management_type = str(rh_a.get("management_type", "")).lower()
     account_number = str(rh_a.get("account_number", ""))
-    cfo_id = _RH_ID_MAP.get(rh_type) or f"rh-{account_number}"
+    if rh_type == "individual" and management_type == "managed":
+        cfo_id = "rh-managed-individual"
+    else:
+        cfo_id = _RH_ID_MAP.get(rh_type) or f"rh-{account_number}"
     atype = _RH_TYPE_MAP.get(rh_type, AccountType.other)
     balance = float(rh_a.get("portfolio_value", 0))
     cash = float(rh_a.get("cash", 0))
