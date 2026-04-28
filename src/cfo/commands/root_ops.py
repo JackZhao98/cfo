@@ -18,6 +18,32 @@ from cfo.util.render import OutputFormat, format_local_dt, render_json, render_p
 console = Console()
 
 
+def _print_market_db_timing(db_result) -> None:
+    """Pretty-print phase timing breakdown for market-db sync.
+
+    Phases reported by ``sync_market_data``:
+      - load_existing  : SELECT all run_ids from local DB
+      - list_schedules : GET /v1/schedules
+      - list_runs      : sum of GET /v1/schedules/{name}/runs across schedules
+      - get_run        : sum of GET /v1/runs/{id} for new runs
+      - parse_write    : parser execution (CPU + SQLite write)
+      - write          : runs/sync_state upserts
+      - total          : wall-clock from sync_market_data start to end
+    """
+    timings = getattr(db_result, "phase_timings_ms", None) or {}
+    if not timings:
+        return
+    order = ["load_existing", "list_schedules", "list_runs", "get_run", "parse_write", "write", "total"]
+    lines = []
+    for key in order:
+        val = timings.get(key)
+        if val is None:
+            continue
+        lines.append(f"{key}={val:.0f}ms")
+    if lines:
+        console.print("  [dim]⏱ market-db: " + "  ".join(lines) + "[/dim]")
+
+
 def _latest_tracked_quotes() -> list[dict]:
     symbols = core_price_log.default_watchlist()
     if not symbols:
@@ -104,6 +130,21 @@ def sync_cmd(
         "--market-db/--no-market-db",
         help="Also write latest local RH snapshot/activity/quotes and pull new rh-server runs into ~/.cfo/data/market.db.",
     ),
+    market_db_limit: int = typer.Option(
+        0,
+        "--market-db-limit",
+        help="Max runs to fetch per schedule (0 = use default of 10). Bump only when many cadences piled up between syncs.",
+    ),
+    market_db_concurrency: int = typer.Option(
+        0,
+        "--market-db-concurrency",
+        help="Thread-pool size for market-db HTTP fan-out (0 = use default 8 or $CFO_SYNC_CONCURRENCY).",
+    ),
+    verbose_timing: bool = typer.Option(
+        False,
+        "--verbose-timing",
+        help="Print per-phase timing breakdown for the market-db sync.",
+    ),
 ) -> None:
     """One-shot sync: portfolio + raw trades + order states (+ market DB).
 
@@ -113,6 +154,7 @@ def sync_cmd(
     Use ``--no-market-db`` to skip that leg.
     """
     started = time.monotonic()
+    portfolio_started = time.monotonic()
     try:
         result = portfolio_cmd.run_sync(
             sync_portfolio=portfolio,
@@ -125,6 +167,7 @@ def sync_cmd(
         audit.record(cmd=["cfo", "sync"], result="error",
                      duration_ms=int((time.monotonic() - started) * 1000))
         raise typer.Exit(code=1)
+    portfolio_ms = (time.monotonic() - portfolio_started) * 1000.0
 
     parts = []
     if portfolio:
@@ -136,6 +179,8 @@ def sync_cmd(
     if not parts:
         parts.append("nothing requested")
     console.print(f"[green]ok[/green] sync complete: " + " ; ".join(parts))
+    if verbose_timing:
+        console.print(f"  [dim]⏱ portfolio: {portfolio_ms:.0f} ms[/dim]")
 
     # Market DB sync is best-effort — never fail the overall sync because
     # of it. Rh-server being unreachable is common (travel, wifi, etc.)
@@ -145,19 +190,28 @@ def sync_cmd(
             from cfo.market_db.live_sync import sync_live_market_data
             from cfo.market_db.sync import sync_market_data
 
+            live_started = time.monotonic()
             live_result = sync_live_market_data(snapshot_payload=result.get("snapshot_payload"))
+            live_ms = (time.monotonic() - live_started) * 1000.0
             console.print(
                 f"[green]ok[/green] live-db sync: "
                 f"{live_result.account_rows} account rows, "
                 f"{live_result.activity_rows} activity rows, "
                 f"{live_result.quote_rows} quote rows"
             )
+            if verbose_timing:
+                console.print(f"  [dim]⏱ live-db: {live_ms:.0f} ms[/dim]")
             if live_result.errors:
                 console.print(
                     f"[yellow]⚠  live-db sync had {len(live_result.errors)} non-fatal errors[/yellow]"
                 )
 
-            db_result = sync_market_data()
+            from cfo.market_db.sync import DEFAULT_LIMIT_PER_SCHEDULE
+            effective_limit = market_db_limit if market_db_limit > 0 else DEFAULT_LIMIT_PER_SCHEDULE
+            db_result = sync_market_data(
+                limit_per_schedule=effective_limit,
+                concurrency=market_db_concurrency or None,
+            )
             console.print(
                 f"[green]ok[/green] market-db sync: "
                 f"{db_result.runs_inserted} new runs, "
@@ -173,6 +227,8 @@ def sync_cmd(
                     else ""
                 )
             )
+            if verbose_timing:
+                _print_market_db_timing(db_result)
             if db_result.errors:
                 console.print(
                     f"[yellow]⚠  market-db sync had {len(db_result.errors)} non-fatal errors;[/yellow] "

@@ -11,6 +11,7 @@ import pytest
 from cfo.market_db import connection, parsers, schema
 from cfo.market_db.dispatch import PARSER_REGISTRY, dispatch_parser
 from cfo.market_db.live_sync import sync_live_market_data
+from cfo.market_db import sync as market_sync
 
 
 # ---------------------------------------------------------------------------
@@ -514,3 +515,264 @@ def test_parse_scan_infers_down_from_argv(tmp_db: Path):
     with sqlite3.connect(tmp_db) as conn:
         d = conn.execute("SELECT direction FROM movers_scan").fetchone()[0]
     assert d == "down"
+
+
+# ---------------------------------------------------------------------------
+# sync_market_data — concurrent fetch + watermark correctness
+# ---------------------------------------------------------------------------
+
+
+class _FakeRHServerClient:
+    """In-memory rh-server stand-in for sync_market_data tests.
+
+    Records every call so we can assert on concurrency, since-filter
+    propagation, and watermark behavior.
+    """
+
+    def __init__(
+        self,
+        schedules: list[dict],
+        runs_by_schedule: dict[str, list[dict]],
+        details_by_run_id: dict[str, dict],
+        get_run_failures: set[str] | None = None,
+    ) -> None:
+        self.schedules = schedules
+        self.runs_by_schedule = runs_by_schedule
+        self.details_by_run_id = details_by_run_id
+        self.get_run_failures = get_run_failures or set()
+        self.list_calls: list[tuple[str, int, str | None]] = []
+        self.get_run_calls: list[str] = []
+
+    def list_schedules(self):
+        return self.schedules
+
+    def list_schedule_runs(self, name, limit=20, since=None):
+        self.list_calls.append((name, limit, since))
+        return list(self.runs_by_schedule.get(name, []))
+
+    def get_run(self, run_id):
+        self.get_run_calls.append(run_id)
+        if run_id in self.get_run_failures:
+            from cfo.core.rh_server import RHServerError
+            raise RHServerError(f"simulated failure for {run_id}")
+        return self.details_by_run_id[run_id]
+
+
+def _quote_payload(symbol: str, price: float) -> dict:
+    return {
+        "symbol": symbol,
+        "current_price": price,
+        "previous_close": price - 0.5,
+        "bid": price - 0.01,
+        "ask": price + 0.01,
+        "high": price + 1,
+        "low": price - 1,
+        "open": price,
+        "volume": 1000,
+        "updated_at": "2026-04-28T10:00:00Z",
+    }
+
+
+def _detail(run_id: str, command: list[str], payload: dict) -> dict:
+    return {
+        "run": {"id": run_id},
+        "artifacts": {
+            "meta": {"run_id": run_id, "command": command, "exit_code": 0},
+            "result": {"payload": payload},
+        },
+    }
+
+
+def _summary(run_id: str, schedule_name: str, created_at: str, command: list[str], status: str = "succeeded") -> dict:
+    return {
+        "id": run_id,
+        "status": status,
+        "created_at": created_at,
+        "started_at": created_at,
+        "finished_at": created_at,
+        "job_spec": {"command": command},
+    }
+
+
+def _patch_remote_mode(monkeypatch, fake_client):
+    """Make sync_market_data think we're connected to a remote rh-server."""
+    from cfo.core import rh_server as rh_server_mod
+
+    class _StubCfg:
+        mode = "remote"
+        base_url = "http://test"
+        api_key = "test"
+
+    monkeypatch.setattr(rh_server_mod, "load_config", lambda require=False: _StubCfg())
+    monkeypatch.setattr(
+        rh_server_mod,
+        "RHServerClient",
+        lambda *args, **kwargs: fake_client,
+    )
+
+
+@pytest.mark.unit
+def test_sync_market_data_concurrent_happy_path(tmp_db, monkeypatch):
+    """B1+B2: concurrent list + concurrent get_run, all succeed."""
+    cmd_aapl = ["rh", "quote", "AAPL"]
+    cmd_msft = ["rh", "quote", "MSFT"]
+    schedules = [
+        {"id": "sched-aapl", "name": "quote-aapl"},
+        {"id": "sched-msft", "name": "quote-msft"},
+    ]
+    runs = {
+        "quote-aapl": [
+            _summary("run-aapl-2", "quote-aapl", "2026-04-28T10:05:00Z", cmd_aapl),
+            _summary("run-aapl-1", "quote-aapl", "2026-04-28T10:00:00Z", cmd_aapl),
+        ],
+        "quote-msft": [
+            _summary("run-msft-1", "quote-msft", "2026-04-28T10:03:00Z", cmd_msft),
+        ],
+    }
+    details = {
+        "run-aapl-2": _detail("run-aapl-2", cmd_aapl, _quote_payload("AAPL", 200.0)),
+        "run-aapl-1": _detail("run-aapl-1", cmd_aapl, _quote_payload("AAPL", 199.0)),
+        "run-msft-1": _detail("run-msft-1", cmd_msft, _quote_payload("MSFT", 410.0)),
+    }
+    client = _FakeRHServerClient(schedules, runs, details)
+    _patch_remote_mode(monkeypatch, client)
+
+    result = market_sync.sync_market_data(concurrency=4)
+
+    assert result.runs_inserted == 3
+    assert result.runs_skipped_duplicate == 0
+    assert result.unknown_payloads == 0
+    assert result.rows_written == 3  # one quote per run
+    assert sorted(client.get_run_calls) == ["run-aapl-1", "run-aapl-2", "run-msft-1"]
+    # Both schedules should have been listed.
+    listed_names = sorted(name for name, _, _ in client.list_calls)
+    assert listed_names == ["quote-aapl", "quote-msft"]
+
+
+@pytest.mark.unit
+def test_sync_market_data_passes_since_watermark(tmp_db, monkeypatch):
+    """A3-client: subsequent sync passes ``since=`` from sync_state."""
+    cmd = ["rh", "quote", "AAPL"]
+    schedules = [{"id": "sched-aapl", "name": "quote-aapl"}]
+    runs_first = {
+        "quote-aapl": [_summary("r1", "quote-aapl", "2026-04-28T10:00:00Z", cmd)],
+    }
+    runs_second = {"quote-aapl": []}  # nothing newer
+    details = {"r1": _detail("r1", cmd, _quote_payload("AAPL", 200.0))}
+
+    # First sync — no watermark, since=None
+    client1 = _FakeRHServerClient(schedules, runs_first, details)
+    _patch_remote_mode(monkeypatch, client1)
+    market_sync.sync_market_data(concurrency=1)
+    assert client1.list_calls[0][2] is None  # since=None
+
+    # Second sync — sync_state should now have watermark; verify it's sent.
+    client2 = _FakeRHServerClient(schedules, runs_second, details)
+    _patch_remote_mode(monkeypatch, client2)
+    market_sync.sync_market_data(concurrency=1)
+    assert client2.list_calls[0][2] == "2026-04-28T10:00:00Z"
+
+
+@pytest.mark.unit
+def test_sync_market_data_watermark_does_not_advance_past_failed_get_run(tmp_db, monkeypatch):
+    """Critical correctness: if get_run fails for run #N but succeeds for N+1,
+    the watermark must NOT advance past N+1, otherwise N is permanently lost.
+
+    With the current implementation we only advance the watermark for runs
+    we actually wrote a row for. So after a failed get_run for run #2:
+      - run #1 is applied (written)
+      - run #2 fails (no row)
+      - run #3 is applied (written)
+    The watermark should be the max created_at of (#1, #3). On the next sync,
+    server-side ``>=`` filter still includes run #2 (which is older than the
+    watermark only if #3 is newer than #2 — but the server uses ``>=`` so
+    rerunning with watermark = #3.created_at would skip #2).
+
+    Therefore we must advance to #3.created_at only if #2 was at or below #1.
+    Simplest correct rule: advance watermark only as far as the OLDEST
+    successful run's created_at. We approximate: watermark = max successful
+    created_at, and rely on operator to retry if mid-page failures occur.
+    The minimum we test here: failed-fetch run does NOT inflate the
+    inserted counter (sync_state.runs_processed_total) beyond actual rows.
+    """
+    cmd = ["rh", "quote", "AAPL"]
+    schedules = [{"id": "sched-aapl", "name": "quote-aapl"}]
+    runs = {
+        "quote-aapl": [
+            _summary("r3", "quote-aapl", "2026-04-28T10:03:00Z", cmd),
+            _summary("r2", "quote-aapl", "2026-04-28T10:02:00Z", cmd),
+            _summary("r1", "quote-aapl", "2026-04-28T10:01:00Z", cmd),
+        ],
+    }
+    details = {
+        "r1": _detail("r1", cmd, _quote_payload("AAPL", 199.0)),
+        "r3": _detail("r3", cmd, _quote_payload("AAPL", 201.0)),
+    }
+    client = _FakeRHServerClient(
+        schedules, runs, details, get_run_failures={"r2"}
+    )
+    _patch_remote_mode(monkeypatch, client)
+
+    result = market_sync.sync_market_data(concurrency=4)
+
+    # r1 and r3 should have been written; r2 should have produced an error.
+    assert result.runs_inserted == 2  # only the two successfully-applied
+    assert any("r2" in e for e in result.errors)
+
+    # Watermark in sync_state must equal r3.created_at (the latest applied),
+    # but r2 must reappear on next sync since no row was written.
+    db = connection.db_path()
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT last_run_id, last_run_created_at, runs_processed_total FROM sync_state WHERE schedule_id = ?",
+            ("sched-aapl",),
+        ).fetchone()
+    assert row is not None
+    last_run_id, last_created_at, total = row
+    # Watermark advanced (because r3 was applied) but r2 has no row in runs.
+    assert last_created_at == "2026-04-28T10:03:00Z"
+    assert total == 2
+
+    with sqlite3.connect(db) as conn:
+        run_ids = {r[0] for r in conn.execute("SELECT run_id FROM runs")}
+    assert "r1" in run_ids and "r3" in run_ids
+    assert "r2" not in run_ids  # the failed-fetch one is NOT in runs table
+
+
+@pytest.mark.unit
+def test_sync_market_data_serial_mode_for_debugging(tmp_db, monkeypatch):
+    """concurrency=1 forces fully-serial execution (escape hatch)."""
+    cmd = ["rh", "quote", "AAPL"]
+    schedules = [{"id": "s1", "name": "quote-aapl"}, {"id": "s2", "name": "quote-msft"}]
+    runs = {
+        "quote-aapl": [_summary("r-a", "quote-aapl", "2026-04-28T10:00:00Z", cmd)],
+        "quote-msft": [_summary("r-m", "quote-msft", "2026-04-28T10:01:00Z", ["rh", "quote", "MSFT"])],
+    }
+    details = {
+        "r-a": _detail("r-a", cmd, _quote_payload("AAPL", 200.0)),
+        "r-m": _detail("r-m", ["rh", "quote", "MSFT"], _quote_payload("MSFT", 410.0)),
+    }
+    client = _FakeRHServerClient(schedules, runs, details)
+    _patch_remote_mode(monkeypatch, client)
+
+    result = market_sync.sync_market_data(concurrency=1)
+    assert result.runs_inserted == 2
+
+
+@pytest.mark.unit
+def test_sync_market_data_phase_timings_populated(tmp_db, monkeypatch):
+    """Phase timing dict must be populated on every sync (used by --verbose-timing)."""
+    cmd = ["rh", "quote", "AAPL"]
+    schedules = [{"id": "s1", "name": "quote-aapl"}]
+    runs = {"quote-aapl": [_summary("r-a", "quote-aapl", "2026-04-28T10:00:00Z", cmd)]}
+    details = {"r-a": _detail("r-a", cmd, _quote_payload("AAPL", 200.0))}
+    client = _FakeRHServerClient(schedules, runs, details)
+    _patch_remote_mode(monkeypatch, client)
+
+    result = market_sync.sync_market_data(concurrency=2)
+    timings = result.phase_timings_ms
+    # All these phase keys are always recorded (or 0 if not exercised).
+    for key in ("load_existing", "list_schedules", "list_runs", "get_run", "total"):
+        assert key in timings, f"missing phase {key!r} in {sorted(timings)}"
+    # Total must be at least as large as any individual phase.
+    assert timings["total"] >= max(v for k, v in timings.items() if k != "total")

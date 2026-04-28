@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from cfo.market_db import connection
+from cfo.market_db import sync as sync_module
 from cfo.market_db.sync import sync_market_data
 
 
@@ -135,10 +136,23 @@ def sync_cmd(
         None, "--schedule", help="Only sync this schedule (default: all)"
     ),
     limit: int = typer.Option(
-        50, "--limit", help="Max runs to fetch per schedule per call"
+        sync_module.DEFAULT_LIMIT_PER_SCHEDULE,
+        "--limit",
+        help="Max runs to fetch per schedule per call (default: 10).",
+    ),
+    concurrency: int = typer.Option(
+        0,
+        "--concurrency",
+        help=(
+            "Thread-pool size for HTTP fan-out (0 = use default 8 or "
+            "$CFO_SYNC_CONCURRENCY env var). Set to 1 to force fully-serial."
+        ),
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Don't commit; show what would happen"
+    ),
+    verbose_timing: bool = typer.Option(
+        False, "--verbose-timing", help="Print per-phase timing breakdown."
     ),
 ) -> None:
     """Pull new runs from rh-server, parse, and upsert into local DB.
@@ -151,19 +165,34 @@ def sync_cmd(
         schedule_filter=schedule,
         limit_per_schedule=limit,
         dry_run=dry_run,
+        concurrency=concurrency or None,
     )
-    _print_sync_result(result, dry_run=dry_run)
+    _print_sync_result(result, dry_run=dry_run, verbose_timing=verbose_timing)
 
 
-def _print_sync_result(result, *, dry_run: bool) -> None:
+def _print_sync_result(result, *, dry_run: bool, verbose_timing: bool = False) -> None:
     t = Table(title=("Sync result (DRY RUN)" if dry_run else "Sync result"))
     t.add_column("Metric")
     t.add_column("Value", justify="right")
+    skip_keys = {"errors", "phase_timings_ms"}
     for k, v in result.as_dict().items():
-        if k == "errors":
+        if k in skip_keys:
             continue
         t.add_row(k, str(v))
     console.print(t)
+    if verbose_timing:
+        timings = getattr(result, "phase_timings_ms", None) or {}
+        if timings:
+            tt = Table(title="Phase timings (ms)")
+            tt.add_column("Phase")
+            tt.add_column("ms", justify="right")
+            order = ["load_existing", "list_schedules", "list_runs", "get_run", "parse_write", "write", "total"]
+            for key in order:
+                val = timings.get(key)
+                if val is None:
+                    continue
+                tt.add_row(key, f"{val:.0f}")
+            console.print(tt)
     if result.errors:
         console.print("\n[yellow]Errors:[/yellow]")
         for err in result.errors[:10]:

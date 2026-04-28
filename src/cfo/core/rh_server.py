@@ -163,8 +163,29 @@ class RHServerClient:
     def enqueue_schedule(self, name: str) -> dict[str, Any]:
         return self._request("POST", f"/v1/schedules/{name}/run", {})
 
-    def list_schedule_runs(self, name: str, limit: int = 20) -> list[dict[str, Any]]:
-        payload = self._request("GET", f"/v1/schedules/{name}/runs?limit={limit}")
+    def list_schedule_runs(
+        self,
+        name: str,
+        limit: int = 20,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List recent runs for a schedule.
+
+        Args:
+            name: schedule name (URL path segment).
+            limit: max rows to return (server caps at 200; defaults to 20).
+            since: optional RFC3339 watermark — server returns rows whose
+                created_at is >= this value (used for incremental sync).
+                Old servers that don't recognize the param ignore it
+                silently and return the last `limit` rows; client-side
+                run_id dedupe still keeps things correct.
+        """
+        from urllib.parse import urlencode
+
+        params: dict[str, str] = {"limit": str(int(limit))}
+        if since:
+            params["since"] = since
+        payload = self._request("GET", f"/v1/schedules/{name}/runs?{urlencode(params)}")
         runs = payload.get("runs")
         if runs is None:
             return []
